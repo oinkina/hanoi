@@ -12,7 +12,6 @@ If you want to change the number of disks, you have to edit the asm and re-assem
 
 TODO: ```Makefile```; command-line argument for n (instead of assemble-time)
 
-
 ### Reasoning
 
-I remembered this as a fun puzzle, and when I looked at the Wikipedia page and saw a ["binary algorithm"](https://en.m.wikipedia.org/wiki/Tower_of_Hanoi#Binary_solution) for the optimal solution, I thought it could be super cute in Assembly.
+I remembered this as a fun puzzle, and when I looked at the Wikipedia page and saw a ["binary algorithm"](https://en.m.wikipedia.org/wiki/Tower_of_Hanoi#Binary_solution) for the optimal solution, I thought the algorithm would be super cute in Assembly. Also, doing something in assembly is a bit of a joke about writing the program "from scratch."

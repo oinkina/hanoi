@@ -9,6 +9,7 @@ format ELF64 ;linux 64-bit executable
 define STDOUT            1
 define SYSCALL_MMAP      9
 define MAP_ANON       0x20
+define MAP_PRIVATE    0x02
 define PROT_READ         1
 define PROT_WRITE        2
 define SYSCALL_WRITE     1
@@ -20,6 +21,7 @@ define SPACE    0xe28280e2 ; add an extra e2 on the end (ie beginning)
 define PIPE     0xe28294e2 ; because each next char begins with e2
 define DASH     0xe28094e2
 define BOTTOM   0xe2b494e2 ; get the pun (it's a domain thoery joke)?
+define NEWLINE  0x0a
 
 define state           r15  ; 64-bit
 define state_tmp       r9   ; 64-bit
@@ -33,11 +35,11 @@ define position        r8d
 define tower_width     ebx ; 32-bit for imul
 define line_width      edi ; 32-bit for imul
 define line_num        esi ; shared with i!
-define N               ecx  ; *TODO
+define N               ecx
 define buf_len         edx
-define x               eax  ; *TODO
-define i               esi  ; *TODO
-define buf             r10 ; *TODO
+define x               eax
+define i               esi
+define buf             r10
 
 ;;;
 
@@ -92,6 +94,7 @@ _start:
 	mov buf_len, 2   ; first and last line are special
 	add buf_len, N
 	imul buf_len, line_width
+	add buf_len, 2   ; for two extra \n chars at the end
     ; Allocate buf_start with buf_len bytes
 	push_registers
       ; call mmap() 
@@ -101,41 +104,48 @@ _start:
 	mov edx, PROT_READ or PROT_WRITE  ; read and write from this memory
 	mov r8, -1             ; file descriptor
 	xor r9, r9             ; file offset
-	mov r10, MAP_ANON      ; anonymous, not tied to another mmap
+	mov r10, MAP_ANON or MAP_PRIVATE  ; anonymous, not tied to another mmap
 	syscall
-	mov buf_start, rax     ; allocated buffer ;~TODO: check it's not an err
+	mov buf_start, rax     ; allocated buffer ;TODO: check it's not an err
 	pop_registers
 	
 ; 1st & last lines
-macro char_loop nchars, char {
-	lea i, nchars
+macro char_loop char {
 @@: ; copy each character into buffer
 	mov dword [buf], char ; copies 4 bytes of char to position buf
 			       ; note: hardcoded dword works for char_bytes=3|4
 	add buf, char_bytes    ; advances buf ptr by char_bytes
 	dec i   ; sets flag for jns
-	jns @b  ; if not neg, jump to previous anon label
+	jnz @b  ; if not neg, jump to previous anon label
 }
 	
 macro 1char char {
 	mov dword [buf], char
 	add buf, char_bytes
-	}
+}
+
+macro newline_char {
+	mov byte [buf], NEWLINE
+	inc buf
+}
 
 macro tower outer, center {
-	char_loop [N+1], outer
+	lea i, [N+1]
+	char_loop outer
 	1char center
-	char_loop [N+1], outer
+	lea i, [N+1]
+	char_loop outer
 }
 
 macro tower_line tower_constructor {
 	tower_constructor
-	char_loop [tower_pad], SPACE
+	mov i, tower_pad
+	char_loop SPACE
 	tower_constructor
-	char_loop [tower_pad], SPACE
+	mov i, tower_pad
+	char_loop SPACE
 	tower_constructor
-	; add newline char
-	mov byte [buf], NEWLINE
+	newline_char
 }
 
     ; 1st line
@@ -150,21 +160,24 @@ macro tower_top { tower SPACE, PIPE }
      ; Last line
 	; initialize buf ptr to beginning of last line: buf = N*line_width
 	lea buf, [N+1]
-	imul esp, line_width    ;*TODO: actual reg for buf 
+	imul r10d, line_width    ; r10d is 32-bit version of buf
 	add buf, buf_start      ; move buf ptr to absolute location
 
 	;write last line
 macro tower_bottom { tower DASH, BOTTOM }
 	tower_line tower_bottom
+	newline_char
+	newline_char
+	
 
 move_loop:  ; termination condition between printing and doing the move
   ; Render state as buffer that's ready to print
     ; Initialize lines 1 through N
 	lea buf, [buf_start+rdi]   ; initialize buf ptr
-	mov i, N
+	mov x, N
 line_loop:
 	tower_line tower_top
-	dec i
+	dec x
 	jnz line_loop
 
     ; Initialize render loop
@@ -181,7 +194,6 @@ line_loop:
 	pop rcx
 
     ; Render loop
-	mov x, N
 disk_loop:
 	; Iterate through disks in state from largest; put each in buffer spot
 	mov r8, state_tmp ; r8 is 64-bit version of position (which tower)
@@ -193,7 +205,7 @@ disk_loop:
 	imul position, tower_width
 	add position, N    ; smallest disk starts furthest in
 	sub position, disk ; position is offset within line
-	; get vertical index (which line the disk goes on) ;~TODO: put disk at proper height
+	; get vertical index (which line the disk goes on) ;TODO: put disk at proper height
 	lea line_num, [disk+1]
 	; get vertical addr in buffer: buf = (line_num * line_width) + buf_start
 				       ; ^ flatten matrix
@@ -215,8 +227,8 @@ blocks: ; copy BLOCK for each character
 	dec i
 	jns blocks
 	shr state_tmp, 2
-	dec x
-	jne disk_loop
+	dec disk
+	jns disk_loop
 
   ; Print buffer
 	push_registers
@@ -243,16 +255,17 @@ blocks: ; copy BLOCK for each character
 	blsi x, m   ; x = m&-m
 	add x, m
         ; %3, from godbolt compiler, using a magic number
-          ; *TODO: x is eax as of now
+	push rdx
 	mov tower_assign, x
         mov edx, -1431655765
         mul edx
         mov eax, edx
+	pop rdx
         shr eax, 1
         lea eax, [rax+rax*2]
         sub tower_assign, eax
 	
-	mov bits, 11b ; *TODO: check usage of bits  ; need to change 2 bits
+	mov bits, 11b ; need to change 2 bits
 	; shift left to position for inserting data; backwards so 62-2*disk
 	mov x, 2
 	imul x, disk

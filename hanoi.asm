@@ -1,3 +1,9 @@
+; user-defined constants
+n=5          ; number of disks in the puzzle
+tower_pad=4  ; padding between towers for pretty printing
+
+;;;
+
 format ELF64 ;linux 64-bit executable
 
 define STDOUT            1
@@ -8,31 +14,30 @@ define PROT_WRITE        2
 define SYSCALL_WRITE     1
 define SYSCALL_EXIT      60
 
+define char_bytes 3 ; bytes per char in pretty printing
 define BLOCK    0xe28896e2 ; intel is little indian (R->L, 2 hex digits / byte)
 define SPACE    0xe28280e2 ; add an extra e2 on the end (ie beginning)
 define PIPE     0xe28294e2 ; because each next char begins with e2
 define DASH     0xe28094e2
 define BOTTOM   0xe2b494e2 ; get the pun (it's a domain thoery joke)?
 
-define tower_pad 4  ; padding between towers for pretty printing
-define char_bytes 3 ; bytes per char in pretty printing
-
 define state           r15  ; 64-bit
 define state_tmp       r9   ; 64-bit
-define m               r14
+define m               r14d
 define max_moves       r13
 define disk            r12d
 define bits            r11
-define tower_assign   r10
+define tower_assign    r10d ; shared with buf
 define buf_start       rbp
 define position        r8d
 define tower_width     ebx ; 32-bit for imul
-define line_width      eax ; 32-bit for imul
-define N               ecx  ; TODO
+define line_width      edi ; 32-bit for imul
+define line_num        esi ; shared with i!
+define N               ecx  ; *TODO
 define buf_len         edx
-define x               eax  ; TODO
-define i               eax  ; TODO
-define buf             rsp ; TODO
+define x               eax  ; *TODO
+define i               esi  ; *TODO
+define buf             r10 ; *TODO
 
 ;;;
 
@@ -69,7 +74,7 @@ _start:
 	xor m, m ; start at move 0
 	; iniialize max_moves, which is 2^n (shift 1 n left)
 	mov max_moves, 1
-	mov ecx, [n]
+	mov ecx, n
 	shl max_moves, cl
 	
     ; Calculate pretty printing sizes to allocate buffer
@@ -90,10 +95,10 @@ _start:
     ; Allocate buf_start with buf_len bytes
 	push_registers
       ; call mmap() 
+	mov esi, buf_len       ; number of bytes to allocate
 	mov eax, SYSCALL_MMAP  ; syscall needs syscall number in eax
 	xor edi, edi           ; at what memory location should it allocate mem
 	mov edx, PROT_READ or PROT_WRITE  ; read and write from this memory
-	mov rsi, buf_len       ; number of bytes to allocate
 	mov r8, -1             ; file descriptor
 	xor r9, r9             ; file offset
 	mov r10, MAP_ANON      ; anonymous, not tied to another mmap
@@ -152,9 +157,15 @@ macro tower_top { tower SPACE, PIPE }
 macro tower_bottom { tower DASH, BOTTOM }
 	tower_line tower_bottom
 
-move_loop: ;TODO: figure out branching
+move_loop:  ; termination condition between printing and doing the move
   ; Render state as buffer that's ready to print
-	; TODO: copy first line to each line from 1 to N
+    ; Initialize lines 1 through N
+	lea buf, [buf_start+rdi]   ; initialize buf ptr
+	mov i, N
+line_loop:
+	tower_line tower_top
+	dec i
+	jnz line_loop
 
     ; Initialize render loop
 	lea disk, [N - 1]     ; start at largest disk (because it's on bottom)
@@ -163,11 +174,15 @@ move_loop: ;TODO: figure out branching
 	; Shift away all the non-data LSB zeros, of which there are 64-2*N
 	mov x, 2
 	imul x, N
+	push rcx
 	mov ecx, 64
 	sub ecx, x
 	shr state_tmp, cl
+	pop rcx
 
     ; Render loop
+	mov x, N
+disk_loop:
 	; Iterate through disks in state from largest; put each in buffer spot
 	mov r8, state_tmp ; r8 is 64-bit version of position (which tower)
 	mov bits, 11b  ; position of disk is in last two bits
@@ -178,17 +193,17 @@ move_loop: ;TODO: figure out branching
 	imul position, tower_width
 	add position, N    ; smallest disk starts furthest in
 	sub position, disk ; position is offset within line
-	; get vertical index (which line the disk goes on) ;TODO: put disk at proper height
+	; get vertical index (which line the disk goes on) ;~TODO: put disk at proper height
 	lea line_num, [disk+1]
 	; get vertical addr in buffer: buf = (line_num * line_width) + buf_start
 				       ; ^ flatten matrix
 	imul line_num, line_width
 	mov buf, buf_start  ; will write at buf; so save buf_start ptr
-	add buf, line_num
+	add buf, rsi        ; rsi is 64-bit version of line_num
 	; get writing addr (combine "offsets") 
 	;     = char_bytes*(horizontal offset) + vertical addr [=buf_start+vertical_offset]
 	imul position, char_bytes
-	add position, buf
+	add buf, r8 ; r8 is 64-bit version of position
 	
       ; Loop: write the blocks into this spot 
 	; initialize; will add 2*disk+3 blocks to buffer for each disk
@@ -199,6 +214,9 @@ blocks: ; copy BLOCK for each character
 	add buf, char_bytes    ; advances buf ptr by char_bytes
 	dec i
 	jns blocks
+	shr state_tmp, 2
+	dec x
+	jne disk_loop
 
   ; Print buffer
 	push_registers
@@ -210,6 +228,13 @@ blocks: ; copy BLOCK for each character
 	syscall	
 	pop_registers
 
+;
+; Termination condition for move_loop
+	inc r14  ; 64-bit version of m
+	cmp r14, max_moves
+	je done
+;
+
   ; Make the move in the state
 	; get index of disk to move	
 	tzcnt disk, m ; disk to move is # of trailing 0s in move number
@@ -218,29 +243,34 @@ blocks: ; copy BLOCK for each character
 	blsi x, m   ; x = m&-m
 	add x, m
         ; %3, from godbolt compiler, using a magic number
-          ; TODO: x is eax as of now
+          ; *TODO: x is eax as of now
 	mov tower_assign, x
         mov edx, -1431655765
         mul edx
         mov eax, edx
-        shr eax
+        shr eax, 1
         lea eax, [rax+rax*2]
         sub tower_assign, eax
 	
-	mov bits, 11b ; TODO: check usage of bits  ; need to change 2 bits
+	mov bits, 11b ; *TODO: check usage of bits  ; need to change 2 bits
 	; shift left to position for inserting data; backwards so 62-2*disk
 	mov x, 2
 	imul x, disk
+	push rcx
 	mov ecx, 62
 	sub ecx, x ; ecx is 62-2*disk now
 	shl bits, cl ; put 2-bit mask in correct spot
-	andn state, bits ; zero out covered bits
-	mov bits, tower_assign ; set desired bits to new assignment
+	andn state, bits, state ; zero out covered bits
+	mov bits, r10 ; set desired bits to tower_assign (r10d)
 	shl bits, cl  ; shift desired bits into correct spot (same spot)
 	or state, bits  ; merge new bits with previous state
+	pop rcx
 
+	;
+	jmp move_loop ; reached bottom of loop, iterate
+	;
 
-
-n dd 5 ; number of disks to transfer, which can go up to 32 (fits in 1 byte) but we allocate 4 for easy loading
-;msg db 'Hello world!',0xA   ; assemble these bytes into binary with ptr to beg: msg
-;msg_size = $-msg    ; $ gets the current index of bytes, subtract from that the ptr to beginning for length
+done:
+	xor	edi,edi    ; clear out edi to 0 (1st arg: which exit code)
+	mov	eax, SYSCALL_EXIT
+	syscall

@@ -2,6 +2,9 @@
 
 Pretty-print the series of moves in a [Tower of Hanoi](https://en.wikipedia.org/wiki/Tower_of_Hanoi) game with n disks using x86-64 Assembly.
 
+Here's the end of the 5 disk solution (but can be used for up to 32 disks, if you're willing to wait...):
+![Look! Towers!](hanoi_screenshot.png)
+
 Done hastily as a small program written from scratch for the RC application.
 
 
